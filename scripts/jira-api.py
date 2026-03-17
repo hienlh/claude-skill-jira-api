@@ -213,7 +213,7 @@ def cmd_create(args):
         data["fields"]["description"] = {
             "type": "doc",
             "version": 1,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": args.body}]}],
+            "content": _wiki_to_adf(args.body),
         }
     if args.priority:
         data["fields"]["priority"] = {"name": args.priority}
@@ -279,15 +279,122 @@ def cmd_move(args):
     print(f"✅ {args.issue} → {matched['to']['name']}")
 
 
-def cmd_comment_add(args):
-    """Add comment to issue."""
-    # Build ADF body
+def _parse_inline_markup(text):
+    """Parse Jira wiki inline markup into ADF inline nodes.
+
+    Supports: *bold*, {{code}}, [text|url], ~strikethrough~, +underline+
+    """
+    import re
+    nodes = []
+    # Pattern: *bold*, {{code}}, [text|url] or [url], ~strike~, +underline+
+    pattern = re.compile(
+        r'\{\{(.+?)\}\}'       # {{code}}
+        r'|\[([^|\]]+)\|([^\]]+)\]'  # [text|url]
+        r'|\[([^\]]+)\]'       # [url] (plain link)
+        r'|\*(.+?)\*'          # *bold*
+        r'|~(.+?)~'            # ~strikethrough~
+        r'|\+(.+?)\+'          # +underline+
+    )
+    last_end = 0
+    for m in pattern.finditer(text):
+        # Add preceding plain text
+        if m.start() > last_end:
+            nodes.append({"type": "text", "text": text[last_end:m.start()]})
+        if m.group(1) is not None:  # {{code}}
+            nodes.append({"type": "text", "text": m.group(1), "marks": [{"type": "code"}]})
+        elif m.group(2) is not None:  # [text|url]
+            nodes.append({"type": "text", "text": m.group(2), "marks": [{"type": "link", "attrs": {"href": m.group(3)}}]})
+        elif m.group(4) is not None:  # [url]
+            nodes.append({"type": "text", "text": m.group(4), "marks": [{"type": "link", "attrs": {"href": m.group(4)}}]})
+        elif m.group(5) is not None:  # *bold*
+            nodes.append({"type": "text", "text": m.group(5), "marks": [{"type": "strong"}]})
+        elif m.group(6) is not None:  # ~strike~
+            nodes.append({"type": "text", "text": m.group(6), "marks": [{"type": "strike"}]})
+        elif m.group(7) is not None:  # +underline+
+            nodes.append({"type": "text", "text": m.group(7), "marks": [{"type": "underline"}]})
+        last_end = m.end()
+    # Trailing text
+    if last_end < len(text):
+        nodes.append({"type": "text", "text": text[last_end:]})
+    return nodes if nodes else [{"type": "text", "text": text}]
+
+
+def _wiki_to_adf(body_text):
+    """Convert Jira wiki markup to ADF (Atlassian Document Format) nodes.
+
+    Supports: h1-h6 headings, bullet lists (* item), numbered lists (# item),
+    horizontal rules (----), inline markup (*bold*, {{code}}, [text|url]).
+    """
+    import re
     content_nodes = []
-    for line in args.body.split("\n"):
+    lines = body_text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Heading: h1. to h6.
+        heading_match = re.match(r'^h([1-6])\.\s*(.*)', line)
+        if heading_match:
+            level = int(heading_match.group(1))
+            text = heading_match.group(2).strip()
+            content_nodes.append({
+                "type": "heading",
+                "attrs": {"level": level},
+                "content": _parse_inline_markup(text),
+            })
+            i += 1
+            continue
+
+        # Horizontal rule: ----
+        if line.strip().startswith('----'):
+            content_nodes.append({"type": "rule"})
+            i += 1
+            continue
+
+        # Bullet list: * item (collect consecutive lines)
+        if re.match(r'^\*\s+', line):
+            list_items = []
+            while i < len(lines) and re.match(r'^\*\s+', lines[i]):
+                item_text = re.sub(r'^\*\s+', '', lines[i])
+                list_items.append({
+                    "type": "listItem",
+                    "content": [{"type": "paragraph", "content": _parse_inline_markup(item_text)}],
+                })
+                i += 1
+            content_nodes.append({"type": "bulletList", "content": list_items})
+            continue
+
+        # Numbered list: # item (collect consecutive lines)
+        if re.match(r'^#\s+', line):
+            list_items = []
+            while i < len(lines) and re.match(r'^#\s+', lines[i]):
+                item_text = re.sub(r'^#\s+', '', lines[i])
+                list_items.append({
+                    "type": "listItem",
+                    "content": [{"type": "paragraph", "content": _parse_inline_markup(item_text)}],
+                })
+                i += 1
+            content_nodes.append({"type": "orderedList", "content": list_items})
+            continue
+
+        # Empty line → skip (don't create empty paragraphs)
+        if not line.strip():
+            i += 1
+            continue
+
+        # Regular paragraph with inline markup
         content_nodes.append({
             "type": "paragraph",
-            "content": [{"type": "text", "text": line}] if line else [],
+            "content": _parse_inline_markup(line),
         })
+        i += 1
+
+    return content_nodes
+
+
+def cmd_comment_add(args):
+    """Add comment to issue. Supports Jira wiki markup in body text."""
+    content_nodes = _wiki_to_adf(args.body)
 
     data = {
         "body": {
@@ -420,7 +527,7 @@ def cmd_worklog_add(args):
         data["comment"] = {
             "type": "doc",
             "version": 1,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": args.comment}]}],
+            "content": _wiki_to_adf(args.comment),
         }
     api_request("POST", f"issue/{args.issue}/worklog", data)
     print(f"✅ Worklog added to {args.issue}: {args.time}")
