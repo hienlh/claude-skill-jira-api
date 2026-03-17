@@ -308,15 +308,42 @@ def cmd_comment_list(args):
 
     print(f"  {total} comments on {args.issue}\n")
     for c in comments:
+        cid = c.get("id", "")
         author = c.get("author", {}).get("displayName", "Unknown")
         created = c.get("created", "")[:19].replace("T", " ")
         body_text = extract_text_from_adf(c.get("body", ""))
-        print(f"  [{created}] {author}:")
+        print(f"  [{created}] {author} (id: {cid}):")
         for line in body_text.split("\n")[:5]:
             print(f"    {line}")
         if len(body_text.split("\n")) > 5:
             print(f"    ... ({len(body_text.split(chr(10)))} lines)")
         print()
+
+
+def cmd_comment_edit(args):
+    """Edit an existing comment."""
+    content_nodes = []
+    for line in args.body.split("\n"):
+        content_nodes.append({
+            "type": "paragraph",
+            "content": [{"type": "text", "text": line}] if line else [],
+        })
+
+    data = {
+        "body": {
+            "type": "doc",
+            "version": 1,
+            "content": content_nodes,
+        }
+    }
+    api_request("PUT", f"issue/{args.issue}/comment/{args.comment_id}", data)
+    print(f"✅ Comment {args.comment_id} updated on {args.issue}")
+
+
+def cmd_comment_delete(args):
+    """Delete a comment."""
+    api_request("DELETE", f"issue/{args.issue}/comment/{args.comment_id}")
+    print(f"✅ Comment {args.comment_id} deleted from {args.issue}")
 
 
 def cmd_attach(args):
@@ -519,6 +546,17 @@ def main():
     p.add_argument("issue", help="Issue key")
     p.add_argument("-l", "--limit", type=int, default=10, help="Max results")
 
+    # comment-edit
+    p = sub.add_parser("comment-edit", help="Edit comment")
+    p.add_argument("issue", help="Issue key")
+    p.add_argument("comment_id", help="Comment ID (from comment-list)")
+    p.add_argument("body", help="New comment body")
+
+    # comment-delete
+    p = sub.add_parser("comment-delete", help="Delete comment")
+    p.add_argument("issue", help="Issue key")
+    p.add_argument("comment_id", help="Comment ID")
+
     # attach
     p = sub.add_parser("attach", help="Add attachments")
     p.add_argument("issue", help="Issue key")
@@ -590,6 +628,8 @@ def main():
         "edit": cmd_edit,
         "move": cmd_move,
         "comment-add": cmd_comment_add,
+        "comment-edit": cmd_comment_edit,
+        "comment-delete": cmd_comment_delete,
         "comment-list": cmd_comment_list,
         "attach": cmd_attach,
         "transitions": cmd_transitions,
