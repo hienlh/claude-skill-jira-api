@@ -392,18 +392,22 @@ def _wiki_to_adf(body_text):
     return content_nodes
 
 
-def cmd_comment_add(args):
-    """Add comment to issue. Supports Jira wiki markup in body text."""
-    content_nodes = _wiki_to_adf(args.body)
-
-    data = {
-        "body": {
-            "type": "doc",
-            "version": 1,
-            "content": content_nodes,
-        }
+def _v2_comment_request(method, url, body_text):
+    """Send a comment request using Jira REST API v2 (wiki markup)."""
+    headers = {
+        "Authorization": get_auth_header(),
+        "Accept": "application/json",
+        "Content-Type": "application/json",
     }
-    api_request("POST", f"issue/{args.issue}/comment", data)
+    data = json.dumps({"body": body_text}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    urllib.request.urlopen(req)
+
+
+def cmd_comment_add(args):
+    """Add comment to issue using Jira v2 API (raw wiki markup)."""
+    url = f"{BASE_URL}/rest/api/2/issue/{args.issue}/comment"
+    _v2_comment_request("POST", url, args.body)
     print(f"✅ Comment added to {args.issue}")
 
 
@@ -428,22 +432,9 @@ def cmd_comment_list(args):
 
 
 def cmd_comment_edit(args):
-    """Edit an existing comment."""
-    content_nodes = []
-    for line in args.body.split("\n"):
-        content_nodes.append({
-            "type": "paragraph",
-            "content": [{"type": "text", "text": line}] if line else [],
-        })
-
-    data = {
-        "body": {
-            "type": "doc",
-            "version": 1,
-            "content": content_nodes,
-        }
-    }
-    api_request("PUT", f"issue/{args.issue}/comment/{args.comment_id}", data)
+    """Edit an existing comment using Jira v2 API (raw wiki markup)."""
+    url = f"{BASE_URL}/rest/api/2/issue/{args.issue}/comment/{args.comment_id}"
+    _v2_comment_request("PUT", url, args.body)
     print(f"✅ Comment {args.comment_id} updated on {args.issue}")
 
 
